@@ -1,0 +1,173 @@
+---
+title: 'A Replication: Global Tactical Asset Allocation- Meb Faber'
+author: "Matthew Kiegerl"
+date: "2/02/2022"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+\href{https://papers.ssrn.com/sol3/papers.cfm?abstract_id=962461} {Global Tactical Asset Allocation} (GTAA) is Meb Faber's seminal paper on tactical asset allocation. The strategy begins by selecting from five globally diverse assets classes. If the asset is above its 10 month SMA go long asset with $20\%$ of wealth else keep the $20\%$ in cash. 
+\smallskip
+
+The five assets used in this replication and have ticker symbols:\newline
+
+SPDR S&P 500 ETF Trust (SPY),\newline
+Vanguard FTSE Europe Index Fund ETF Shares (VGK), \newline
+iShares 7-10 Year Treasury Bond ETF (IEF),\newline
+Vanguard  Real Estate Index ETF (VNQ)\newline
+Invesco DB Commodity Index Tracking Fund (DBC),\newline
+
+
+```{r results='hide', message=FALSE, warning=FALSE, echo=FALSE, cache=TRUE}
+
+require(quantstrat)
+########### Replication of Global Tactical Asset Allocation GTAA 5 by Meb Faber ###################################################
+
+### By: Matthew Kiegerl
+  # 
+  # In this illustration, I will attempt to replicate the Global Tactical Asset Allocation 
+  # from Meb Faber at Cambria Investment Management
+  # 
+  # Step 1: From 5 Globally Diversified Asset Classes measure the 10 month SMA
+  # Step 2: if price asset class is greater than SMA go long asset with 20% 
+  # 
+  #
+
+
+
+
+
+  # 5 major Global Asset Classes represented by ETF tickers 
+  tickers <- c("SPY", # SPDR S&P 500 
+               "VGK", # Vanguard FTSE Europe Index
+               "IEF", # iShares 7-10 Year Treasury Bond
+               "VNQ", # Vanguard  Real Estate Index 
+               "DBC") # Invesco DB Commodity Index
+
+  
+  # Get adjusted prices from the tickers, cbind prices
+  prices <- list()
+  for(i in 1:length(tickers)) {
+    
+    etfPrices <- Ad(get(getSymbols(tickers[i], from = '2000-01-01')))
+    colnames(etfPrices) <- tickers[i]
+    prices[[i]] <- etfPrices
+  }
+  prices <- na.omit(do.call(cbind, prices))
+  
+  
+  # to monthly prices and calulate returns
+  monthlyPrices <- to.monthly(prices, OHLC=FALSE)
+  colnames(monthlyPrices) <- tickers
+  retsGlobalFive <- na.omit(Return.calculate(monthlyPrices))
+  
+  
+  # create SMA data of five assets
+  # Make list, calc SMA 10 on monthly prices, Cbind List
+  SMAglobal <- list()
+  for(i in 1:length(tickers)) {
+    
+    smaPrices <- SMA(monthlyPrices[,i], 10)
+    colnames(smaPrices) <- paste0("SMA_10_" , tickers[i])
+    SMAglobal[[i]] <- smaPrices
+  }
+  SMAglobal <- na.omit(do.call(cbind, SMAglobal))
+  
+  
+  
+  # Fit monthly price data to same length as SMA data
+  ratioPrices <- monthlyPrices[((length(monthlyPrices[,1])-length(SMAglobal[,1]))+1):length(monthlyPrices[,1]), ]
+  
+  
+  # create Ratio data of five assets, make list, calc SMA 10 on monthly prices, Cbind list
+  ratio <- list()
+  for(i in 1:length(tickers)) {
+    
+    priceTOsma <- (ratioPrices[,i]/SMAglobal[,i]) - 1
+    colnames(priceTOsma) <- paste0("P2SMA_" , tickers[i])
+    ratio[[i]] <- priceTOsma
+  }
+  ratio <- na.omit(do.call(cbind, ratio))
+  
+  
+  # create signal for ratio > 0, sig list to return T/F  
+  sigs <- list()
+  for(i in 1:length(tickers)) {
+    
+    signals <- ratio[,i] > 0
+    colnames(signals) <- paste0("Sig_" , tickers[i])
+    sigs[[i]] <- signals
+  }
+  sigs <- na.omit(do.call(cbind, sigs))
+
+
+  # lag sig df to even up rows with rets in same period(months)
+  # make global 5 assets ret data to same length as sig data
+  lagSigs <- na.omit(lag(sigs))
+  sigRets <- retsGlobalFive[((length(retsGlobalFive[,1])-length(sigs[,1]))+2) : length(retsGlobalFive[,1]), ]
+
+  
+  # multiply rets to sig list, bind table 
+  GTAA5rets <- list()
+  for(i in 1:length(tickers)) {
+    
+    returns <- lagSigs[,i] * sigRets[,i]
+    colnames(returns) <- paste0("GTAA_rets_" , tickers[i])
+    GTAA5rets[[i]] <- returns
+  }
+  GTAA5rets <- na.omit(do.call(cbind, GTAA5rets))
+  
+  
+  # sum rows to get cum sum
+  GTAA5 <- list()
+  for(i in 1:length(GTAA5rets[,1])) {
+    sums <- sum(GTAA5rets[i, 1:length(tickers)])
+    GTAA5[[i]] <- sums
+  }
+  GTAA5 <- na.omit(do.call(rbind, GTAA5))
+  colnames(GTAA5) <- "GTAA"
+
+  # divide by 5 to get portfolio returns equal weight
+  GTAA5df <- cbind(GTAA5rets, (GTAA5/length(tickers)))
+  
+```
+A performance metric displaying calculated average- Annual Returns, Annual Standard Deviation, Annual Sharpe Ratio- Max Drawdown and Calmar Ratio. 
+\smallskip
+```{r results= "show",  message=FALSE, warning=FALSE, echo=FALSE, cache=TRUE}
+
+# compute strategy statistics, Ann Rets/ Ann SD/ Ann Sharpe/ Max DD/ Calmar Ratio
+  stratStats <- function(rets) {
+    stats <- rbind(table.AnnualizedReturns(rets), maxDrawdown(rets))
+    stats[5,] <- stats[1,]/stats[4,]
+    rownames(stats)[4] <- "Max Drawdown"
+    rownames(stats)[5] <- "Calmar Ratio"
+    return(stats)
+  }
+stratStats(GTAA5df$GTAA)
+```
+\newpage
+Cumulative Return, Daily  Return histogram and Drawdown curve of the GTAA strategy from Dec 2006 
+
+\smallskip
+```{r results= "show",  message=FALSE, warning=FALSE, echo=FALSE, cache=TRUE}
+
+ # Plot strat rets, monthly ret histogram and drawdown curve
+  charts.PerformanceSummary(GTAA5df$GTAA)
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+

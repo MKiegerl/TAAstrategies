@@ -1,0 +1,181 @@
+---
+title: 'A Replication: Adaptive Asset Allocation- ReSolve Asset Management'
+author: "Matthew Kiegerl"
+date: "2/18/2022"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+\href{https://papers.ssrn.com/sol3/papers.cfm?abstract_id=2328254} {Adaptive Asset Allocation} (AAA) is a portfolio and risk management method written by Adam Butler at ReSolve Asset Management. The strategy begins by selecting the best five assets ranked on six month momentum at the close of the last trading day of the month, from a basket of ten globally diverse asset classes represented in this model as ETF tickers. AAA is weighted according to minimum variance optimization, using a covariance matrix calculated based on 126-day correlation and 20-day volatility. Rebalance AAA at the end of every month. 
+\smallskip
+
+The ten assets used in this replication and have ticker symbols:\newline
+
+SPDR S&P 500 ETF Trust (SPY),\newline
+Vanguard FTSE Europe Index Fund ETF Shares (VGK), \newline
+iShares MSCI Japan ETF (EWJ),\newline
+iShares, Inc. - iShares MSCI Emerging Markets ETF (EEM)\newline
+Vanguard  Real Estate Index ETF (VNQ)\newline
+SPDR Dow Jones International Real Estate ETF (RWX)\newline
+iShares 7-10 Year Treasury Bond ETF (IEF),\newline
+iShares 20+ Year Treasury Bond ETF (TLT),\newline
+Invesco DB Commodity Index Tracking Fund (DBC),\newline
+SPDR Gold Shares (GLD)\newline
+ 
+
+
+```{r results='hide', message=FALSE, warning=FALSE, echo=FALSE, cache=TRUE}
+
+require(quantstrat)
+require(tseries)
+########### Replication of Global Tactical Asset Allocation GTAA 5 by Meb Faber ###################################################
+
+### By: Matthew Kiegerl
+  # 
+  # In this illustration, I will attempt to replicate the Adaptive Asset Allocation strategy from ReSolve Asset Management
+  # 
+  # Step 1: Select from 5 Globally Diversified Asset Classes from the list of 10 based on 6 month momentum
+  # Step 2: weight portfolio mean-var optimization every month using 6m correlations and 1 month volatilities
+  # 
+
+
+
+
+
+  # 10 major Global Asset Classes represented by ETF tickers 
+  tickers <- c("SPY", # SPDR S&P 500 ETF Trust
+               "VGK", # Vanguard FTSE Europe Index Fund ETF Shares
+               "EWJ", # iShares MSCI Japan ETF
+               "EEM", # iShares, Inc. - iShares MSCI Emerging Markets ETF
+               "VNQ", # Vanguard  Real Estate Index ETF
+               "RWX", # SPDR Dow Jones International Real Estate ETF 
+               "IEF", # iShares 7-10 Year Treasury Bond ETF
+               "TLT", # iShares 20+ Year Treasury Bond ETF 
+               "DBC", # Invesco DB Commodity Index Tracking Fund
+               "GLD"  # SPDR Gold Shares
+  ) 
+  
+  
+  # Store Log returns data caluclated from adjusted prices to a list
+  returns <- list()
+  
+  for(i in 1:length(tickers)) {
+    rets <- Return.calculate(Ad(get(getSymbols(tickers[i],
+                                                  from = '2000-01-01', 
+                                                  method = "log"))))
+    colnames(rets) <- tickers[i]
+    returns[[i]] <- rets
+  }
+  
+  # cbind rets
+  returns <- na.omit(do.call(cbind, returns))
+  
+  
+  # The Adaptive Asset Allocation algorithm- ReSolve Asset Management ala KiegerlQuant
+ 
+    
+    # get monthly endpoints, apply crash prevention
+    endMonth <- endpoints(returns)
+    endMonth[endMonth < 1] <- 1
+    endMonth[endMonth > nrow(returns)] <- nrow(returns)
+    endMonth <- unique(endMonth)
+    emDiff <- diff(endMonth)
+    if(last(emDiff)==1) { # if the last period only has one observation, remove it
+      endMonth <- endMonth[-length(endMonth)] 
+    }
+    
+    # initialize vector holding zeroes for assets placement
+    emptyVector <- data.frame(t(rep(0, length(tickers))))
+    colnames(emptyVector) <- tickers[1:(length(tickers))]
+    
+    
+    # Create List to stoe weights
+    allWeights <- list()
+    
+      # Start loop for 6m filter
+      for(i in 1:(length(endMonth)-6)) {
+        
+        # subset for 6m of returns- store subsetted returns data for 6 and 1 month
+        retSubset <- returns[c((endMonth[i]+1):endMonth[(i+6)]),]
+        emSub <- endMonth[i:(i+6)]
+        sixMonths <- returns[(emSub[1]+1):emSub[7],]
+        oneMonth <- returns[(emSub[6]+1):emSub[7],]
+      
+        # compute 6 month cumulativer returns as momentum factor
+        momentums <- Return.cumulative(sixMonths)
+        
+        # find top five assets
+        highRankAssets <- rank(momentums) >= (length(tickers) - 4) 
+        
+        # index the assets in top five by rank
+        indx <- which(highRankAssets)
+        
+        # 6m correlation to match with momentum filter, 1m volatilities, calc Covariance Matrix
+        correlations <- cor(sixMonths[,indx])
+        volatilities <- StdDev(oneMonth[,indx]) # use last month of data for volatility rcomputation from AAA
+        covariances <- t(volatilities) %*% volatilities * correlations
+        
+        # compute standard min vol optimization
+        minVolRets <- t(matrix(rep(1, sum(highRankAssets))))
+        minVolWts <- portfolio.optim(x=minVolRets, covmat = covariances)$pw
+        names(minVolWts) <- colnames(covariances)
+        investedAssets <- emptyVector
+        investedAssets[,highRankAssets] <- minVolWts
+        
+        # append to list of monthly allocations
+        weights <- xts(investedAssets, order.by=last(index(retSubset)))
+        allWeights[[i]] <- weights
+        
+      }
+  
+    # put all weights  and returns together 
+    allWeights <- do.call(rbind, allWeights)
+    investedRets <- returns[,1:(length(tickers))]
+  
+    # compute AAA portfolio returns
+    AAA <- Return.portfolio(R = investedRets, weights = allWeights)
+    colnames(AAA) <- "AAA Strategy"
+```
+A performance metric displaying calculated average- Annual Returns, Annual Standard Deviation, Annual Sharpe Ratio- Max Drawdown and Calmar Ratio. 
+\smallskip
+```{r results= "show",  message=FALSE, warning=FALSE, echo=FALSE, cache=TRUE}
+
+# compute strategy statistics, Ann Rets/ Ann SD/ Ann Sharpe/ Max DD/ Calmar Ratio
+  stratStats <- function(rets) {
+    stats <- rbind(table.AnnualizedReturns(rets), maxDrawdown(rets))
+    stats[5,] <- stats[1,]/stats[4,]
+    rownames(stats)[4] <- "Max Drawdown"
+    rownames(stats)[5] <- "Calmar Ratio"
+    return(stats)
+  }
+  stratStats(AAA)
+
+```
+\newpage
+Cumulative Return, Daily  Return histogram and Drawdown curve of the AAA strategy from Jun 2007 
+
+\smallskip
+```{r results= "show",  message=FALSE, warning=FALSE, echo=FALSE, cache=TRUE}
+
+ # Plot strat rets, monthly ret histogram and drawdown curve
+  charts.PerformanceSummary(AAA)
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

@@ -1,0 +1,278 @@
+---
+title: 'A Replication: The Trinity Portfolio- Meb Faber'
+author: "Matthew Kiegerl"
+date: "2/3/2022"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+\href{https://www.cambriainvestments.com/wp-content/uploads/2016/07/Trinity_DIGITAL_final.pdf} {The Trinity Portfolio} uses a basket of globally diverse asset classes and splits the portfolio into two parts $50/50$. The first is a passive buy and hold then re balanced monthly and where the weightings vary depending on your risk tolerance. 
+\smallskip
+
+The assets are ETFs and as follows. \newline
+
+
+iShares MSCI USA Momentum Factorv (MTUM), \newline
+iShares Russell 1000 Value (IWD), \newline
+iShares MSCI EAFE Value (EFV), \newline
+iShares MSCI Emerging Markets (EEM)\newline
+iShares iBoxx Investment Grade Corporate Bond (LQD)\newline
+iShares 20+ Year Treasury Bond (TLT), \newline
+SPDR Bloomberg Barclays International Treasury Bond (BWX),\newline 
+iShares TIPS Bond (TIP),\newline
+iShares MSCI Emerging Markets (EEM)\newline
+Invesco DB Commodity Index Tracking Fund (DBC)\newline
+SPDR Gold Shares (GLD)\newline
+Vanguard  Real Estate Index ETF (VNQ)\newline
+
+
+The second part ranks the average of the 1/3/6/12 month cumulative returns from the assets and selects the top 5, then filters for if the price is above the 10 month SMA, those assets get evenly weighted $1/5$ in the portfolio and in cash if not. These three elements create the Trinity Portfolio. Following is and equity curve of the strategy from 2014-present, a histogram of monthly returns and and Drawdown curve.
+ 
+\smallskip
+
+```{r results='hide', message=FALSE, warning=FALSE, echo=FALSE, cache=TRUE}
+
+require(quantstrat)
+
+########### Replication of the Trinity Portfolio- Meb Faber ###################################################
+
+### By: Matthew Kiegerl
+  # 
+  # In this illustration, I will attempt to replicate the Trinity Portfolio from
+  # Meb Faber's 2015 white paper "The Trinity Portfolio" 
+  #
+  # The Trinity Portfolio is split into two equal halves.
+  # The first invests in a static buy & hold allocation, 
+  # and the second in a dynamic momentum/trend-following strategy.
+  # 
+  # First Part: Select from 11 Globally Diversified Asset Classes
+  # Use momentum and value factor tilts to US equities, and a value tilt to international equities
+  # 
+  # Second Part: Apply simple momentum filter, select best half after 1/3/6/12m cum ret average
+  # Apply trend following from filtered set, if asset > 10m SMA go long 1/5 else cash
+  #
+  # Note: MTUM and IWD will be weighted as the single US equity component evenly
+  # 
+
+
+
+
+
+##########################          #############################
+
+  # 11 Global Asset Classes(ETF tickers) 
+  tickers <- c("MTUM", # iShares MSCI USA Momentum Factor ETF
+               "IWD", # iShares Russell 1000 Value ETF
+               "EFV", # iShares MSCI EAFE Value ETF
+               "EEM", # iShares MSCI Emerging Markets ETF
+               "LQD", # iShares iBoxx Investment Grade Corporate Bond ETF
+               "TLT", # iShares 20+ Year Treasury Bond ETF
+               "BWX", # SPDR Bloomberg Barclays International Treasury Bond ETF
+               "TIP", # iShares TIPS Bond ETF
+               "DBC", # Invesco DB Commodity Index Tracking Fund
+               "GLD", # SPDR Gold Shares
+               "VNQ" # Vanguard  Real Estate Index ETF
+               )  
+
+
+  # Calculate returns from adjusted daily price data of ETFs from YAHOO, 
+  # store in list bind columns, round to 5 decimal places
+  rets <- list()
+  for(i in 1:length(tickers)) {
+    
+    returns <- Return.calculate(Ad(get(getSymbols(tickers[i], from = '2000-01-01'))))
+    colnames(returns) <- tickers[i]
+    rets[[i]] <- returns
+  }
+  rets <- na.omit(do.call(cbind, rets))
+  rets <- round(rets, 5)
+
+
+  # Set weights for buy and hold part of strategy
+  w = c(.09, .09, .135, .045, .198, .135, .144, .018, .05, .05, .045) 
+
+
+  # calculate portfolio returns for passive part of portfolio
+  port.rebal.monthly <- Return.portfolio(rets, weights = w, rebalance_on = "months")
+  colnames(port.rebal.monthly) <- "Trinity Portfolio" 
+
+  
+  #### trend following part of strat ########################################################3
+
+  # Get adjusted prices of ticker symbols, store in list, cbind data
+  prices <- list()
+  for(i in 1:length(tickers)) {
+    
+    ticker <- Ad(get(getSymbols(tickers[i], from = '2000-01-01')))
+    colnames(ticker) <- tickers[i]
+    prices[[i]] <- ticker
+    
+  }
+  prices <- na.omit(do.call(cbind, prices))
+  
+  
+  # create monthly price and return data from daily price data
+  monthly.prices <- to.period(prices, period = "months", OHLC = FALSE)
+  monthly.rets <- na.omit(Return.calculate(monthly.prices))
+
+
+  # Calc 1-3-6-12 month rets, take average, rank the averages and select top 5, row bind data
+  rankAssets <- list()
+  
+  for(i in 1:(length(monthly.rets$MTUM)-11)) {
+    
+    twelvemonths <- monthly.rets[c(i:(i+11)),]
+    sixMonths <- monthly.rets[c((i+6):(i+11)),]
+    threeMonths <- monthly.rets[c((i+9):(i+11)),]  
+    oneMonth <- monthly.rets[c((i+11):(i+11)),]
+    
+    momentums <- (Return.cumulative(oneMonth) + 
+                    Return.cumulative(threeMonths) +
+                    Return.cumulative(sixMonths) + 
+                    Return.cumulative(twelvemonths))/4
+    
+    highRankAssets <- rank(momentums) >= (length(tickers) - 4) # top 5 assets
+    rankAssets[[i]] <- which(highRankAssets)
+  }
+  rankAssets <- do.call(rbind, rankAssets)
+
+
+  # calculate 10 month simple moving average from monthly prices 
+  allSMA <- list()
+  
+  for(i in 1:(length(tickers))) {
+    
+    movingAverages <- SMA(monthly.prices[,i], 10)
+    colnames(movingAverages) <- tickers[i]
+    colnames(movingAverages) <- paste("SMA10", colnames(movingAverages), sep = "_")
+    allSMA[[i]]<- movingAverages
+  }
+  allSMA <- na.omit(do.call(cbind, allSMA)) 
+
+
+  # Adjust monthly prices to same length as ranks matrix
+  monthly.prices.adjDate <- monthly.prices[13:(length(monthly.prices$MTUM)),]
+
+
+  # chose the ranked assets from monthly prices  
+  chosenAssets <- list()
+  for (i in 1:length(monthly.prices.adjDate$MTUM)) {
+    
+    chosenAssets[[i]] <- monthly.prices.adjDate[(i), rankAssets[i,]]
+  }
+  chosenAssets <-na.omit(do.call(rbind, chosenAssets))
+  colnames(chosenAssets)<- NULL
+
+
+  # adjust sma prices to length of ranks
+  monthly.SMA.adjDate <- allSMA[4:(length(allSMA$SMA10_MTUM)),]
+
+  
+  # choose ranked SMA 
+  chosenSMA <- list()
+  for (i in 1:length(monthly.SMA.adjDate$SMA10_MTUM)) {
+    
+    chosenSMA[[i]] <- monthly.SMA.adjDate[(i), rankAssets[i,]]
+  }
+  chosenSMA <-na.omit(do.call(rbind, chosenSMA))
+  colnames(chosenSMA)<- NULL  
+  
+  
+  # adjust monthly rets to length of ranks
+  monthly.rets.adjDate <- monthly.rets[12:(length(monthly.rets$MTUM)),]
+
+
+  # get selected rets from ranks
+  chosenRets <- list()
+  
+  for (i in 1:length(monthly.rets.adjDate$MTUM)) {
+    
+    chosenRets[[i]] <- monthly.rets.adjDate[(i), rankAssets[i,]]
+  }
+  chosenRets <-na.omit(do.call(rbind, chosenRets))
+  colnames(chosenRets)<- NULL  
+
+
+  # T/F df of signal  
+  chosenSignal <- chosenAssets>chosenSMA
+
+  
+  #align rets df to signal
+  stratDF <- cbind(na.omit(lag(chosenSignal)), chosenRets)
+  stratDF <- stratDF[2:length(stratDF[,1])]
+
+
+  # get returns from true signal
+  signaledRets <- data.frame()
+  
+  for (i in 1:length(stratDF[,1])) {
+    for (j in 1:5) {
+      if(stratDF[i,j] == 1){
+        signaledRets[i,j] <- as.numeric(stratDF[i,(j+5)])
+      } else{
+        signaledRets[i,j] <- 0
+      }
+    }
+  }
+
+
+  # Calc Trend part Returns, equal weight average of rets summation
+  trendRets <- list()
+  
+  for (i in 1:length(signaledRets[,1])) {
+    trendRets[[i]] <- sum(signaledRets[i,])/5
+  }
+  trendRets <- do.call(rbind, trendRets)
+
+
+  # Calc rets from passive, adjust length
+  passiveRets <- apply.monthly(port.rebal.monthly, FUN = sum)
+  passiveRets <- passiveRets[1:length(passiveRets[,1])-1]
+  passiveRets <- passiveRets[13:length(passiveRets[,1])]
+
+  # cbind passive and trend
+  trinity_Strat_DF <- cbind(passiveRets, trendRets)
+  
+  
+  # Sum Passive and Trend and divide by 2 to get Trinity Portfolio Rets
+  trinityStrat <- trinity_Strat_DF[,1]+trinity_Strat_DF[,2]
+  trinityStrat <- (trinityStrat)/2
+  colnames(trinityStrat) <- c("Trinity Portfolio")
+
+```
+A performance metric displaying calculated average- Annual Returns, Annual Standard Deviation, Annual Sharpe Ratio- Max Drawdown and Calmar Ratio. 
+\smallskip
+```{r results= "show",  message=FALSE, warning=FALSE, echo=FALSE, cache=TRUE}
+
+# compute strategy statistics, Ann Rets/ Ann SD/ Ann Sharpe/ Max DD/ Calmar Ratio
+  stratStats <- function(rets) {
+    stats <- rbind(table.AnnualizedReturns(rets), maxDrawdown(rets))
+    stats[5,] <- stats[1,]/stats[4,]
+    rownames(stats)[4] <- "Max Drawdown"
+    rownames(stats)[5] <- "Calmar Ratio"
+    return(stats)
+  }
+  stratStats(trinityStrat)
+
+```
+\newpage
+Cumulative Return, Daily  Return histogram and Drawdown curve of the Trinity Portfolio from April 2014
+
+\smallskip
+```{r results= "show",  message=FALSE, warning=FALSE, echo=FALSE, cache=TRUE}
+
+ # Plot strat rets, monthly ret histogram and drawdown curve
+  charts.PerformanceSummary(trinityStrat)
+```
+
+
+
+
+
+
+
+
+

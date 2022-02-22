@@ -1,0 +1,222 @@
+---
+title: 'A Replication: Robust Asset Allocation- Alpha Architect, Wes Gray'
+author: "Matthew Kiegerl"
+date: "2/22/2022"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+\href{https://alphaarchitect.com/2014/12/02/the-robust-asset-allocation-raa-index/} {Robust Asset Allocation}(RAA) seeks capital appreciation with downside protection written by Wes Gray at Alpha Architect. The strategy begins by taking a balanced approach to weighting a portfolio(RAAx) $40\%$ to equities, $40\%$ to real assets and $20\%$ to bonds rebalanced yearly. If RAAx's 10 month cumulative return is greater than the bond's long $50\%$ of wealth to RAAx. If RAAx is greater than the 10m SMA of RAAx, go long $50\%$ RAAx. Sum the two parts to get RAA.
+\smallskip
+
+The seven assets used in this replication and have ticker symbols:\newline
+
+Alpha Architect U.S. Quantitative Momentum ETF (QMOM)\newline
+Alpha Architect U.S. Quantitative Value ETF (QVAL)\newline
+Alpha Architect International Quantitative Momentum ETF (IMOM)\newline
+Alpha Architect International Quantitative Value ETF (IVAL)\newline
+Vanguard Real Estate Index Fund ETF (VNQ)\newline
+Invesco DB Commodity Index Tracking Fund (DBC)\newline
+iShares 7-10 Year Treasury Bond ETF (IEF)
+ 
+
+
+```{r results='hide', message=FALSE, warning=FALSE, echo=FALSE, cache=TRUE}
+
+require(quantstrat)
+########### Replication of Global Tactical Asset Allocation GTAA 5 by Meb Faber ###################################################
+
+### By: Matthew Kiegerl
+  # 
+  # In this illustration, I will attempt to replicate the Adaptive Asset Allocation strategy from ReSolve Asset Management
+  # 
+  # Step 1: Select from 5 Globally Diversified Asset Classes from the list of 10 based on 6 month momentum
+  # Step 2: weight portfolio mean-var optimization every month using 6m correlations and 1 month volatilities
+  # 
+
+
+
+
+
+  # 7major Global Asset Classes represented by ETF tickers 
+  tickers <- c("QMOM", # Alpha Architect U.S. Quantitative Momentum ETF
+               "QVAL", # Alpha Architect U.S. Quantitative Value ETF
+               "IMOM", # Alpha Architect International Quantitative Momentum ETF 
+               "IVAL", # Alpha Architect International Quantitative Value ETF
+               "VNQ", # Vanguard Real Estate Index Fund ETF
+               "DBC", # Invesco DB Commodity Index Tracking Fund
+               "IEF" # iShares 7-10 Year Treasury Bond ETF
+               )
+
+  
+  
+   # Get daily Adjusted Prices
+  prices <- list()
+  for(i in 1:length(tickers)) {
+    
+    ticker <- Ad(get(getSymbols(tickers[i], from = '2000-01-01')))
+    colnames(ticker) <- tickers[i]
+    prices[[i]] <- ticker
+    
+  }
+  
+  # Bind price columns, make monthly price and calc monthly rets
+  prices <- na.omit(do.call(cbind, prices))
+  monthly.prices <- to.period(prices, period = "months", OHLC = FALSE)
+  monthly.rets <- na.omit(Return.calculate(monthly.prices))
+  
+  
+  # Create the framework portfolio(RAA) for from the monthly return data
+  # rebalance the portfolio yearly
+  # 40% equity, 40% Real Assets, 20% Bonds
+  RAAbalancedMONTHLY <- Return.portfolio(
+    monthly.rets,
+    weights = c(10/100, 10/100, 10/100, 10/100, 2/10, 2/10, 1/5), 
+    rebalance_on = 'years')
+  colnames(RAAbalancedMONTHLY) <- "RAA_Bal_RetsM"
+  
+  
+  ### Rule 1 TMOM, RAA - Bond > 0 = 50% long of portfolio
+  
+  
+  # Start loop to calc the ten month cumsum Rets of the RAA Bal and IEF bonds. 
+  stratSig <- list()
+  for(i in 1:(length(monthly.rets[,1])-9)) {
+    
+    # 10 months of Rets
+    tenmonthsStrat <- RAAbalancedMONTHLY[c(i:(i+9)),]
+    tenmonthsIEF <- monthly.rets$IEF[c(i:(i+9)),]
+    
+    # compute cum returns
+    stratCum <- Return.cumulative(tenmonthsStrat)
+    iefCum <- Return.cumulative(tenmonthsIEF)
+    
+    
+    # Excess returns = RAA cum rets - IEF cum rets
+    # If excess rets > 0 go long strat with 50%
+    xRetsSig <- ((stratCum - iefCum) > 0) 
+    stratSig[[i]] <- xRetsSig
+    
+  }# end Loop
+  
+  # rbind Signal(matrix) list into one column
+  stratSig <- do.call(rbind, stratSig)
+  
+  
+  # create Data Frame with signal column and RAA Bal rets make equal length
+  DFxsRets <- cbind(stratSig, RAAbalancedMONTHLY[10:length(RAAbalancedMONTHLY), ])
+  colnames(DFxsRets) <- c("stratSig", "RAAbalMrets")
+  
+  
+  # Start loop, multiply sig row by next RAA rets row for realized return
+  RAA_B_xsRets <- list()
+  for(i in 1:(length(DFxsRets$stratSig)-1)) {
+    
+    returns <- as.numeric(DFxsRets$stratSig[i]) * as.numeric(DFxsRets$RAAbalMrets[i+1])
+    RAA_B_xsRets[[i]] <- returns
+    
+  }#end Loop
+  
+  # Bind rows into a single column of Realized returns, len=60, class = list
+  RAA_B_xsRets <- do.call(rbind, RAA_B_xsRets)
+  
+  # make xsRets into XTS object
+  firstpart <- cbind(DFxsRets[2:length(stratSig)], RAA_B_xsRets)
+  
+  
+  ### Rule 2 ,SMA10 on RAA balanced, if ret > SMA = 50% of Portfolio
+  
+  
+  # Cum sum Raa monthly rets, sma10 on cum sum RAA rets
+  cumRetsRAA <- cumsum(RAAbalancedMONTHLY)
+  SMAcumRetsRAA <- SMA(cumRetsRAA, 10)
+  
+  # make Data Frame Cbind RAA rets, Cum sum rets and sma
+  RAA_DF_sma<- na.omit(cbind(RAAbalancedMONTHLY, cumRetsRAA, SMAcumRetsRAA))
+  colnames(RAA_DF_sma) <- c("RetsRAA","CumRetsRAA","SMA")
+  
+  
+  #signal for sma strat, cum rets>sma
+  #start loop create signal
+  smaSig<- list()
+  for(i in 1:length(RAA_DF_sma$RetsRAA)) {
+    
+    momDiff <- (as.numeric(RAA_DF_sma$CumRetsRAA[i]) - as.numeric(RAA_DF_sma$SMA[i])) > 0
+    smaSig[[i]] <- momDiff
+    
+  }# end loop
+  
+  # Bind rows
+  smaSig <- do.call(rbind, smaSig)
+  
+  
+  #create Data Frame with signal and RAA rets
+  RAA_DF_sma <- cbind(RAA_DF_sma, smaSig)
+  
+  
+  # Start loop, multiply sig row by next RAA rets row for realized return
+  RAA_B_smaRets <- list()
+  for(i in 1:(length(RAA_DF_sma$RetsRAA)-1)) {
+    
+    returns <- as.numeric(RAA_DF_sma$smaSig[i]) * as.numeric(RAA_DF_sma$RetsRAA[i+1])
+    RAA_B_smaRets[[i]] <- returns
+    
+  }#end Loop
+  
+  # Bind rows into a single column of Realized returns, len=60, class = list
+  RAA_B_smaRets <- do.call(rbind, RAA_B_smaRets)
+  
+  
+  # make SMA rets into XTS object
+  secondpart <- cbind(RAA_DF_sma[2:length(smaSig)], RAA_B_smaRets)
+  
+  
+  # Combine two strategy rets, 50% to each allocation, sum up parts
+  TMOMrets <- firstpart$RAA_B_xsRets*.5
+  SMArets <- secondpart$RAA_B_smaRets*.5
+  RAA_B_rets <- TMOMrets + SMArets 
+  colnames(RAA_B_rets) <- "RAA Balanced Returns"
+```
+A performance metric displaying calculated average- Annual Returns, Annual Standard Deviation, Annual Sharpe Ratio- Max Drawdown and Calmar Ratio. 
+\smallskip
+```{r results= "show",  message=FALSE, warning=FALSE, echo=FALSE, cache=TRUE}
+
+# compute strategy statistics, Ann Rets/ Ann SD/ Ann Sharpe/ Max DD/ Calmar Ratio
+  stratStats <- function(rets) {
+    stats <- rbind(table.AnnualizedReturns(rets), maxDrawdown(rets))
+    stats[5,] <- stats[1,]/stats[4,]
+    rownames(stats)[4] <- "Max Drawdown"
+    rownames(stats)[5] <- "Calmar Ratio"
+    return(stats)
+  }
+  stratStats(RAA_B_rets)
+
+```
+\newpage
+Cumulative Return, Daily  Return histogram and Drawdown curve of the RAA strategy from Nov 2016 
+
+\smallskip
+```{r results= "show",  message=FALSE, warning=FALSE, echo=FALSE, cache=TRUE}
+
+ # Plot strat rets, monthly ret histogram and drawdown curve
+  charts.PerformanceSummary(RAA_B_rets)
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
